@@ -250,7 +250,7 @@ def evaluate_rank(
     g_dsetids=None,
     max_rank=10,
     use_metric_cuhk03=False,
-    use_cython=False,
+    use_cython=True,
     use_flowstate=False
 ):
     """Evaluates CMC rank.

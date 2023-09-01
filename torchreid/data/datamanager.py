@@ -171,6 +171,7 @@ class ImageDataManager(DataManager):
         num_instances=4,
         num_cams=1,
         num_datasets=1,
+        max_batches=None,
         train_sampler='RandomSampler',
         train_sampler_t='RandomSampler',
         cuhk03_labeled=False,
@@ -218,7 +219,8 @@ class ImageDataManager(DataManager):
                 batch_size=batch_size_train,
                 num_instances=num_instances,
                 num_cams=num_cams,
-                num_datasets=num_datasets
+                num_datasets=num_datasets,
+                max_batches=max_batches,
             ),
             batch_size=batch_size_train,
             shuffle=False,

@@ -7,7 +7,7 @@ from torch.utils.data.sampler import Sampler, RandomSampler, SequentialSampler
 
 AVAI_SAMPLERS = [
     'RandomIdentitySampler', 'SequentialSampler', 'RandomSampler',
-    'RandomDomainSampler', 'RandomDatasetSampler'
+    'RandomDomainSampler', 'RandomDatasetSampler', 'FlowstateSampler'
 ]
 
 
@@ -75,6 +75,90 @@ class RandomIdentitySampler(Sampler):
                 final_idxs.extend(batch_idxs)
                 if len(batch_idxs_dict[pid]) == 0:
                     avai_pids.remove(pid)
+
+        return iter(final_idxs)
+
+    def __len__(self):
+        return self.length
+
+
+class FlowstateSampler(Sampler):
+    """Randomly samples N identities each with K instances from a single dataset.
+
+    Args:
+        data_source (list): contains tuples of (img_path(s), pid, camid, dsetid).
+        batch_size (int): batch size.
+        num_instances (int): number of instances per identity in a batch.
+    """
+
+    def __init__(self, data_source, batch_size, num_instances, max_batches=5000):
+        if batch_size < num_instances:
+            raise ValueError(
+                'batch_size={} must be no less '
+                'than num_instances={}'.format(batch_size, num_instances)
+            )
+
+        self.data_source = data_source
+        self.batch_size = batch_size
+        self.num_instances = num_instances
+        self.num_pids_per_batch = self.batch_size // self.num_instances
+        self.index_dic = defaultdict(lambda: defaultdict(list))
+
+
+        for index, items in enumerate(data_source):
+            pid = items[1]
+            dsetid = items[3]
+            self.index_dic[dsetid][pid].append(index)
+
+        # estimate number of examples in an epoch
+        self.length = 0
+        for dsetid in self.index_dic.keys():
+            for pid in self.index_dic[dsetid].keys():
+                idxs = self.index_dic[dsetid][pid]
+                num = len(idxs)
+                if num < self.num_instances:
+                    num = self.num_instances
+                self.length += num - num % self.num_instances
+        if max_batches is not None:
+            self.length = min(self.length, (max_batches * self.batch_size))
+
+
+    def __iter__(self):
+        batch_idxs_dict = defaultdict(lambda: defaultdict(list))
+
+        for dsetid in self.index_dic.keys():
+            for pid in self.index_dic[dsetid].keys():
+                idxs = copy.deepcopy(self.index_dic[dsetid][pid])
+                if len(idxs) < self.num_instances:
+                    idxs = np.random.choice(
+                        idxs, size=self.num_instances, replace=True
+                    )
+                random.shuffle(idxs)
+                batch_idxs = []
+                for idx in idxs:
+                    batch_idxs.append(idx)
+                    if len(batch_idxs) == self.num_instances:
+                        batch_idxs_dict[dsetid][pid].append(batch_idxs)
+                        batch_idxs = []
+
+
+        avai_dsets = copy.deepcopy(list(batch_idxs_dict.keys()))
+        final_idxs = []
+
+        while len(avai_dsets) > 1:
+            dsetid = random.sample(avai_dsets, 1)[0]
+            if len(batch_idxs_dict[dsetid].keys()) < self.num_pids_per_batch:
+                avai_dsets.remove(dsetid)
+                continue
+            avai_pids = copy.deepcopy(list(batch_idxs_dict[dsetid].keys()))
+            selected_pids = random.sample(avai_pids, self.num_pids_per_batch)
+            for pid in selected_pids:
+                batch_idxs = batch_idxs_dict[dsetid][pid].pop(0)
+                final_idxs.extend(batch_idxs)
+                if len(batch_idxs_dict[dsetid][pid]) == 0:
+                    batch_idxs_dict[dsetid].pop(pid)
+            if len(final_idxs) >= self.length:
+                break
 
         return iter(final_idxs)
 
@@ -209,6 +293,7 @@ def build_train_sampler(
     num_instances=4,
     num_cams=1,
     num_datasets=1,
+    max_batches=None,
     **kwargs
 ):
     """Builds a training sampler.
@@ -241,5 +326,8 @@ def build_train_sampler(
 
     elif train_sampler == 'RandomSampler':
         sampler = RandomSampler(data_source)
+
+    elif train_sampler == 'FlowstateSampler':
+        sampler = FlowstateSampler(data_source, batch_size, num_instances, max_batches)
 
     return sampler
