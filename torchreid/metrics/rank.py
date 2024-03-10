@@ -19,6 +19,7 @@ def eval_cuhk03(distmat, q_pids, g_pids, q_camids, g_camids, max_rank):
     Key: one image for each gallery identity is randomly sampled for each query identity.
     Random sampling is performed num_repeats times.
     """
+    print('cuhk03 eval')
     num_repeats = 10
     num_q, num_g = distmat.shape
 
@@ -88,13 +89,14 @@ def eval_cuhk03(distmat, q_pids, g_pids, q_camids, g_camids, max_rank):
     all_cmc = all_cmc.sum(0) / num_valid_q
     mAP = np.mean(all_AP)
 
-    return all_cmc, mAP
+    return all_cmc, mAP, -1
 
 
 def eval_market1501(distmat, q_pids, g_pids, q_camids, g_camids, max_rank):
     """Evaluation with market1501 metric
     Key: for each query identity, its gallery images from the same camera view are discarded.
     """
+    print('market1501 eval')
     num_q, num_g = distmat.shape
 
     if num_g < max_rank:
@@ -150,13 +152,14 @@ def eval_market1501(distmat, q_pids, g_pids, q_camids, g_camids, max_rank):
     all_cmc = all_cmc.sum(0) / num_valid_q
     mAP = np.mean(all_AP)
 
-    return all_cmc, mAP
+    return all_cmc, mAP, -1
 
 
 def eval_flowstate(distmat, q_pids, g_pids, q_camids, g_camids, q_dsetids, g_dsetids, max_rank):
     """Evaluation with market1501 metric
     Key: for each query identity, its gallery images from the same camera view are discarded.
     """
+    print('flowstate eval')
     num_q, num_g = distmat.shape
 
     if num_g < max_rank:
@@ -172,6 +175,7 @@ def eval_flowstate(distmat, q_pids, g_pids, q_camids, g_camids, q_dsetids, g_dse
     # compute cmc curve for each query
     all_cmc = []
     all_AP = []
+    all_win_perc = []
     num_valid_q = 0. # number of valid query
 
     for q_idx in range(num_q):
@@ -207,16 +211,20 @@ def eval_flowstate(distmat, q_pids, g_pids, q_camids, g_camids, q_dsetids, g_dse
         AP = tmp_cmc.sum() / num_rel
         all_AP.append(AP)
 
+        win_perc = raw_cmc[:max_rank].sum() / max_rank
+        all_win_perc.append(win_perc)
+
     assert num_valid_q > 0, 'Error: all query identities do not appear in gallery'
 
     all_cmc = np.asarray(all_cmc).astype(np.float32)
     all_cmc = all_cmc.sum(0) / num_valid_q
     mAP = np.mean(all_AP)
+    win_perc = np.mean(all_win_perc)
 
-    return all_cmc, mAP
+    return all_cmc, mAP, win_perc
 
 def evaluate_py(
-    distmat, q_pids, g_pids, q_camids, g_camids, q_dsetids, gdsetids, max_rank, use_metric_cuhk03, use_flowstate
+    distmat, q_pids, g_pids, q_camids, g_camids, q_dsetids, g_dsetids, max_rank, use_metric_cuhk03, use_flowstate=False
 ):
     if use_metric_cuhk03:
         return eval_cuhk03(
@@ -224,7 +232,7 @@ def evaluate_py(
         )
     elif use_flowstate:
         return eval_flowstate(
-            distmat, q_pids, g_pids, q_camids, q_dsetids, gdsetids, g_camids, max_rank
+            distmat, q_pids, g_pids, q_camids, g_camids, q_dsetids, g_dsetids, max_rank
         )
     else:
         return eval_market1501(
@@ -240,7 +248,7 @@ def evaluate_rank(
     g_camids,
     q_dsetids=None,
     g_dsetids=None,
-    max_rank=50,
+    max_rank=10,
     use_metric_cuhk03=False,
     use_cython=True,
     use_flowstate=False
@@ -264,19 +272,16 @@ def evaluate_rank(
             This is highly recommended as the cython code can speed up the cmc computation
             by more than 10x. This requires Cython to be installed.
     """
-    if use_flowstate:
-        return evaluate_py(
-            distmat, q_pids, g_pids, q_camids, g_camids, max_rank,
-            use_metric_cuhk03, use_flowstate
-        )
 
     if use_cython and IS_CYTHON_AVAI:
-        return evaluate_cy(
+        cmc, mAP = evaluate_cy(
             distmat, q_pids, g_pids, q_camids, g_camids, max_rank,
             use_metric_cuhk03
         )
+        win_perc = 0
     else:
-        return evaluate_py(
-            distmat, q_pids, g_pids, q_camids, g_camids, max_rank,
+        cmc, mAP, win_perc = evaluate_py(
+            distmat, q_pids, g_pids, q_camids, g_camids, q_dsetids, g_dsetids, max_rank,
             use_metric_cuhk03, use_flowstate
         )
+    return cmc, mAP, win_perc

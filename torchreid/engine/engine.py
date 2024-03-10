@@ -36,6 +36,7 @@ class Engine(object):
         self.model = None
         self.optimizer = None
         self.scheduler = None
+        self.wandb_logger = None
 
         self._models = OrderedDict()
         self._optims = OrderedDict()
@@ -126,8 +127,9 @@ class Engine(object):
         visrank=False,
         visrank_topk=10,
         use_metric_cuhk03=False,
-        ranks=[1, 5, 10, 20],
-        rerank=False
+        ranks=[1, 5, 10],
+        rerank=False,
+        wandb_logger=None
     ):
         r"""A unified pipeline for training and evaluating a model.
 
@@ -160,6 +162,7 @@ class Engine(object):
                 Default is False. This is only enabled when test_only=True.
         """
 
+        self.wandb_logger = wandb_logger
         if visrank and not test_only:
             raise ValueError(
                 'visrank can be set to True only if test_only=True'
@@ -353,15 +356,15 @@ class Engine(object):
         visrank_topk=10,
         save_dir='',
         use_metric_cuhk03=False,
-        ranks=[1, 5, 10, 20],
+        ranks=[1, 5, 10],
         rerank=False
     ):
         batch_time = AverageMeter()
 
         def _feature_extraction(data_loader):
-            f_, pids_, camids_ = [], [], []
+            f_, pids_, camids_, dsetids_ = [], [], [], []
             for batch_idx, data in enumerate(data_loader):
-                imgs, pids, camids = self.parse_data_for_eval(data)
+                imgs, pids, camids, dsetids = self.parse_data_for_eval(data)
                 if self.use_gpu:
                     imgs = imgs.cuda()
                 end = time.time()
@@ -371,17 +374,19 @@ class Engine(object):
                 f_.append(features)
                 pids_.extend(pids.tolist())
                 camids_.extend(camids.tolist())
+                dsetids_.extend(dsetids.tolist())
             f_ = torch.cat(f_, 0)
             pids_ = np.asarray(pids_)
             camids_ = np.asarray(camids_)
-            return f_, pids_, camids_
+            dsetids_ = np.asarray(dsetids_)
+            return f_, pids_, camids_, dsetids_
 
         print('Extracting features from query set ...')
-        qf, q_pids, q_camids = _feature_extraction(query_loader)
+        qf, q_pids, q_camids, q_dsetids = _feature_extraction(query_loader)
         print('Done, obtained {}-by-{} matrix'.format(qf.size(0), qf.size(1)))
 
         print('Extracting features from gallery set ...')
-        gf, g_pids, g_camids = _feature_extraction(gallery_loader)
+        gf, g_pids, g_camids, g_dsetids = _feature_extraction(gallery_loader)
         print('Done, obtained {}-by-{} matrix'.format(gf.size(0), gf.size(1)))
 
         print('Speed: {:.4f} sec/batch'.format(batch_time.avg))
@@ -404,19 +409,25 @@ class Engine(object):
             distmat = re_ranking(distmat, distmat_qq, distmat_gg)
 
         print('Computing CMC and mAP ...')
-        cmc, mAP = metrics.evaluate_rank(
+        cmc, mAP, win_perc = metrics.evaluate_rank(
             distmat,
             q_pids,
             g_pids,
             q_camids,
             g_camids,
-            use_metric_cuhk03=use_metric_cuhk03
+            q_dsetids,
+            g_dsetids,
+            use_metric_cuhk03=use_metric_cuhk03,
+            use_flowstate=True
         )
-
+        self.wandb_logger.log({'val/mAP': mAP})
+        self.wandb_logger.log({'val/win_perc': win_perc})
         print('** Results **')
         print('mAP: {:.1%}'.format(mAP))
+        print(f'Win Perc: {win_perc:.1%}')
         print('CMC curve')
         for r in ranks:
+            self.wandb_logger.log({f'val/cmc_{r}': cmc[r - 1]})
             print('Rank-{:<3}: {:.1%}'.format(r, cmc[r - 1]))
 
         if visrank:
@@ -451,7 +462,8 @@ class Engine(object):
         imgs = data['img']
         pids = data['pid']
         camids = data['camid']
-        return imgs, pids, camids
+        dsetids = data['dsetid']
+        return imgs, pids, camids, dsetids
 
     def two_stepped_transfer_learning(
         self, epoch, fixbase_epoch, open_layers, model=None
