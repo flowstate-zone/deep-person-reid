@@ -9,7 +9,7 @@ matplotlib
 tb-nightly
 future
 yacs
-gdown
+gdown==4.1
 flake8
 yapf
 isort==4.3.21
